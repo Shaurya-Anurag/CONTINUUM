@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
 
 from .database import Base, engine, get_db
-from .models import Project, Claim, ClaimStatus, AuditEvent, Source, Evidence
+from .models import Project, Claim, ClaimStatus, AuditEvent, Source, Evidence, ClaimEvidence
 from .schemas import ProjectOut, ClaimOut, ReviewIn, HandoverRequest, HandoverOut
 from .services import seed_demo, get_claim, claim_payload
 
@@ -73,7 +73,7 @@ def list_claims(project_id: str, status: ClaimStatus | None = None, db: Session 
     if not db.get(Project, project_id):
         raise HTTPException(404, "Project not found")
     q = db.query(Claim).options(
-        joinedload(Claim.evidence_links).joinedload("evidence").joinedload("source")
+        joinedload(Claim.evidence_links).joinedload(ClaimEvidence.evidence).joinedload(Evidence.source)
     ).filter(Claim.project_id == project_id)
     if status:
         q = q.filter(Claim.status == status)
