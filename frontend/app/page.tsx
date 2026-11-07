@@ -1,85 +1,191 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity, Archive, ArrowDownRight, ArrowUpRight, Bell, BookOpen, Check,
-  ChevronDown, ChevronRight, CircleHelp, Clock3, Command, FileText, GitBranch,
-  LayoutDashboard, LockKeyhole, MoreHorizontal, Plus, Search, ShieldCheck,
-  Sparkles, Users, Workflow, X, AlertTriangle, CircleDot, Link2,
+  Activity, Archive, ArrowUpRight, BookOpen, Check, ChevronRight, Clock3,
+  FileText, GitBranch, LayoutDashboard, LoaderCircle, RefreshCw, Search,
+  ShieldCheck, Users, Workflow, X, AlertTriangle, CircleHelp, Plus,
 } from 'lucide-react';
 
-type ClaimStatus = 'verified' | 'review' | 'conflict';
-type Claim = { id: string; title: string; detail: string; status: ClaimStatus; source: string; time: string; owner: string };
+type Project = { id: string; name: string; description: string; created_at: string };
+type Evidence = { id: string; source_title: string; excerpt: string; locator: Record<string, unknown>; observed_at?: string | null };
+type ClaimStatus = 'proposed' | 'needs_review' | 'verified' | 'rejected' | 'conflict';
+type Claim = { id: string; statement: string; category: string; status: ClaimStatus; confidence?: number | null; owner?: string | null; created_at: string; evidence: Evidence[] };
+type Summary = { claim_count: number; source_count: number; verified_count: number; needs_review_count: number; conflict_count: number; rejected_count: number; knowledge_coverage: number };
+type Source = { id: string; kind: string; title: string; uri?: string | null; access_scope: string; imported_at: string; evidence_count: number; is_demo: boolean };
+type Event = { id: string; actor: string; action: string; entity_type: string; entity_id: string; details: Record<string, unknown>; created_at: string };
+type Handover = { project_id: string; recipient: string; scope: string; generated_at: string; verified: Claim[]; needs_review: Claim[]; conflicts: Claim[]; excluded_count: number };
 
-const initialClaims: Claim[] = [
-  { id: 'CLM-024', title: 'API migration is blocked by legacy webhook consumers', detail: 'The v2 rollout is waiting on two downstream services to stop consuming the v1 payload.', status: 'review', source: 'Architecture sync · 14:32', time: '2h ago', owner: 'Maya Chen' },
-  { id: 'CLM-021', title: 'PostgreSQL remains the system of record', detail: 'The team rejected a document-store migration for the current release because transactional integrity is required.', status: 'verified', source: 'ADR-008 · Decision record', time: 'Yesterday', owner: 'Arjun Rao' },
-  { id: 'CLM-019', title: 'Search indexing has no confirmed operational owner', detail: 'The runbook names the platform team, while the latest incident thread assigns follow-up to infrastructure.', status: 'conflict', source: 'Runbook + incident #142', time: 'Yesterday', owner: 'Unassigned' },
-];
-
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const nav = [
-  { label: 'Workspace', items: [{ name: 'Overview', icon: LayoutDashboard }, { name: 'Knowledge graph', icon: Workflow }, { name: 'Chronicle', icon: Clock3 }, { name: 'Evidence room', icon: Archive }] },
-  { label: 'Continuity', items: [{ name: 'Handovers', icon: BookOpen }, { name: 'People & ownership', icon: Users }, { name: 'Source library', icon: FileText }] },
+  { group: 'WORKSPACE', items: [{ name: 'Overview', icon: LayoutDashboard }, { name: 'Knowledge graph', icon: Workflow }, { name: 'Chronicle', icon: Clock3 }, { name: 'Evidence room', icon: Archive }] },
+  { group: 'CONTINUITY', items: [{ name: 'Handovers', icon: BookOpen }, { name: 'People & ownership', icon: Users }, { name: 'Source library', icon: FileText }] },
 ];
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API}${path}`, { ...init, headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) }, cache: 'no-store' });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`API ${response.status}: ${body.slice(0, 240)}`);
+  }
+  return response.json();
+}
 
 function Status({ status }: { status: ClaimStatus }) {
-  const labels = { verified: 'Verified', review: 'Needs review', conflict: 'Conflict' };
+  const labels: Record<ClaimStatus, string> = { verified: 'Verified', needs_review: 'Needs review', proposed: 'Proposed', conflict: 'Conflict', rejected: 'Rejected' };
   return <span className={`status status-${status}`}><i />{labels[status]}</span>;
 }
 
 export default function Home() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [events, setEvents] = useState<Event[]>([]);
   const [active, setActive] = useState('Overview');
-  const [claims, setClaims] = useState(initialClaims);
   const [query, setQuery] = useState('');
-  const [showHandover, setShowHandover] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
-  const [selectedClaim, setSelectedClaim] = useState<string | null>(null);
-  const filtered = useMemo(() => claims.filter(c => `${c.title} ${c.detail} ${c.source}`.toLowerCase().includes(query.toLowerCase())), [claims, query]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [recipient, setRecipient] = useState('');
+  const [scope, setScope] = useState('project');
+  const [handover, setHandover] = useState<Handover | null>(null);
 
-  function verify(id: string) {
-    setClaims(prev => prev.map(c => c.id === id ? { ...c, status: 'verified' } : c));
-    setSelectedClaim(null);
-    setNotice('Claim marked as verified in this demo workspace.');
-    window.setTimeout(() => setNotice(''), 3200);
+  const load = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const list = await request<Project[]>('/api/v1/projects');
+      setProjects(list);
+      const current = project && list.find(p => p.id === project.id) ? list.find(p => p.id === project.id)! : list[0];
+      setProject(current || null);
+      if (!current) { setSummary(null); setClaims([]); setSources([]); setEvents([]); return; }
+      const [s, c, src, ev] = await Promise.all([
+        request<Summary>(`/api/v1/projects/${current.id}/summary`),
+        request<Claim[]>(`/api/v1/projects/${current.id}/claims`),
+        request<Source[]>(`/api/v1/projects/${current.id}/sources`),
+        request<Event[]>(`/api/v1/projects/${current.id}/events`),
+      ]);
+      setSummary(s); setClaims(c); setSources(src); setEvents(ev);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not connect to CONTINUUM API.'); }
+    finally { setLoading(false); }
+  }, [project?.id]);
+
+  useEffect(() => { void load(); }, []); // initial connection only; explicit refresh and mutations reload data
+
+  const filtered = useMemo(() => claims.filter(c => `${c.statement} ${c.category} ${c.owner || ''} ${c.evidence.map(e => e.source_title + ' ' + e.excerpt).join(' ')}`.toLowerCase().includes(query.toLowerCase())), [claims, query]);
+
+  async function review(claim: Claim, status: ClaimStatus) {
+    setBusy(claim.id); setError('');
+    try {
+      await request<Claim>(`/api/v1/claims/${claim.id}/review`, { method: 'POST', body: JSON.stringify({ status, reviewer: 'Workspace owner', note: 'Reviewed in CONTINUUM workspace.' }) });
+      setNotice(`Claim moved to ${status.replace('_', ' ')}.`); setSelected(null); await load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Review failed.'); }
+    finally { setBusy(''); }
   }
 
-  return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-lockup"><div className="brand-mark"><span /><span /><span /></div><div><div className="brand-name">CONTINUUM</div><div className="brand-kicker">THE LIVING ARCHIVE</div></div></div>
-        <button className="workspace-switch"><div className="workspace-avatar">N</div><span><b>Northstar Platform</b><small>Engineering workspace</small></span><ChevronDown size={15}/></button>
-        <div className="nav-scroll">
-          {nav.map(group => <div className="nav-group" key={group.label}><div className="nav-label">{group.label}</div>{group.items.map(item => <button key={item.name} onClick={() => setActive(item.name)} className={`nav-item ${active === item.name ? 'active' : ''}`}><item.icon size={17}/><span>{item.name}</span>{item.name === 'Evidence room' && <em>3</em>}</button>)}</div>)}
-          <div className="nav-group"><div className="nav-label">Recent projects</div><button className="project-link active-project"><span className="project-dot"/>Northstar Platform</button><button className="project-link"><span className="project-dot sage"/>Atlas Mobile</button><button className="project-link"><span className="project-dot copper"/>Mercury Data</button><button className="add-project"><Plus size={14}/> Add a project</button></div>
-        </div>
-        <div className="sidebar-bottom"><div className="sync-card"><div className="sync-top"><span className="sync-indicator"/>Archive status</div><b>Up to date</b><small>Last reconstructed 18 min ago</small><div className="sync-line"><span/></div></div><button className="nav-item"><CircleHelp size={17}/>Help & documentation</button><div className="profile"><div className="profile-avatar">SA</div><div><b>Shaurya Anurag</b><small>Workspace owner</small></div><MoreHorizontal size={18}/></div></div>
-      </aside>
+  async function createHandover() {
+    if (!project || !recipient.trim()) return;
+    setBusy('handover'); setError('');
+    try {
+      const result = await request<Handover>(`/api/v1/projects/${project.id}/handovers`, { method: 'POST', body: JSON.stringify({ recipient: recipient.trim(), scope }) });
+      setHandover(result); setActive('Handovers'); await load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Handover draft failed.'); }
+    finally { setBusy(''); }
+  }
 
-      <section className="main-area">
-        <header className="topbar"><div className="breadcrumbs"><span>Northstar Platform</span><ChevronRight size={14}/><b>{active}</b></div><div className="top-actions"><div className="search-box"><Search size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search the archive"/><kbd>⌘ K</kbd></div><button className="icon-button" aria-label="Notifications"><Bell size={17}/><i/></button><div className="top-avatar">SA</div></div></header>
-        <div className="content-wrap">
-          <div className="eyebrow"><span className="eyebrow-rule"/>PROJECT INTELLIGENCE <span className="eyebrow-sep">/</span> 07 NOVEMBER 2026</div>
-          <div className="page-heading"><div><h1>The project, <em>remembered.</em></h1><p className="lead">A living record of what changed, why it changed, and what must happen next.</p></div><div className="heading-actions"><button className="button button-quiet" onClick={() => setNotice('Source connection flow is the next integration milestone.')}><Plus size={15}/> Connect source</button><button className="button button-primary" onClick={() => setShowHandover(true)}><Sparkles size={15}/> Create handover</button></div></div>
-
-          <section className="project-banner"><div className="banner-copy"><div className="banner-label"><span className="live-dot"/> CONTINUITY PULSE <span className="banner-divider">·</span> PROJECT 001</div><h2>Northstar Platform</h2><p>Reconstructing the knowledge behind your team's work.</p><div className="banner-meta"><span><GitBranch size={13}/> main</span><span><Users size={13}/> 8 contributors</span><span><Clock3 size={13}/> Active for 14 months</span></div></div><div className="pulse-visual"><div className="pulse-ring ring-one"/><div className="pulse-ring ring-two"/><div className="pulse-ring ring-three"/><div className="pulse-core"><Archive size={23}/></div><span className="pulse-node node-a"/><span className="pulse-node node-b"/><span className="pulse-node node-c"/></div><div className="banner-index">01 <span>—</span> 03</div></section>
-
-          <section className="metrics-grid"><Metric label="Knowledge captured" value="86%" note="+12% this month" trend="up" icon={<Archive size={16}/>} progress={86}/><Metric label="Verified claims" value="124" note="18 awaiting review" trend="up" icon={<ShieldCheck size={16}/>} progress={72}/><Metric label="Open dependencies" value="07" note="2 need an owner" trend="down" icon={<GitBranch size={16}/>} progress={38}/><Metric label="Continuity readiness" value="B+" note="Good · gaps remain" trend="up" icon={<Activity size={16}/>} progress={78}/></section>
-
-          <div className="section-heading"><div><div className="section-overline">THE RECORD</div><h3>What the archive knows</h3><p>Extracted knowledge, connected to its original evidence.</p></div><button className="text-action" onClick={() => setActive('Evidence room')}>Open evidence room <ArrowUpRight size={14}/></button></div>
-          <section className="knowledge-layout"><div className="claims-panel"><div className="panel-head"><div><b>Knowledge requiring attention</b><small>Claims that shape the current project state</small></div><button className="filter-button">All claims <ChevronDown size={13}/></button></div><div className="claim-list">{filtered.map(claim => <article className={`claim-row ${selectedClaim === claim.id ? 'claim-selected' : ''}`} key={claim.id} onClick={() => setSelectedClaim(selectedClaim === claim.id ? null : claim.id)}><div className="claim-marker"><span className={`marker-${claim.status}`}/></div><div className="claim-content"><div className="claim-topline"><span>{claim.id}</span><Status status={claim.status}/></div><h4>{claim.title}</h4><p>{claim.detail}</p><div className="claim-meta"><span><FileText size={12}/>{claim.source}</span><span>{claim.time}</span></div>{selectedClaim === claim.id && <div className="claim-expanded"><div><b>Current owner</b><span>{claim.owner}</span></div><div><b>Evidence trace</b><span>{claim.source}</span></div><button className="verify-button" onClick={e => {e.stopPropagation(); verify(claim.id)}}><Check size={13}/> Mark verified</button></div>}</div><ChevronRight className="claim-chevron" size={16}/></article>)}{filtered.length === 0 && <div className="empty-state">No archive records match “{query}”.</div>}</div><button className="panel-footer" onClick={() => setActive('Evidence room')}>View all knowledge records <ArrowUpRight size={14}/></button></div>
-
-            <aside className="chronicle-panel"><div className="panel-head"><div><b>Recent chronicle</b><small>Events that changed the project</small></div><button className="more-button"><MoreHorizontal size={17}/></button></div><div className="chronicle-list"><ChronicleItem color="brass" date="TODAY · 10:42" title="Release scope reaffirmed" text="Decision recorded in Product sync." tag="DECISION"/><ChronicleItem color="sage" date="YESTERDAY · 16:18" title="Database ownership updated" text="Arjun Rao became primary owner." tag="OWNERSHIP"/><ChronicleItem color="copper" date="YESTERDAY · 11:06" title="Webhook dependency surfaced" text="Two consumers remain on v1 payload." tag="DEPENDENCY"/><ChronicleItem color="stone" date="NOV 05 · 14:20" title="Runbook revised" text="Deployment sequence clarified." tag="SOURCE CHANGE"/></div><button className="panel-footer" onClick={() => setActive('Chronicle')}>Explore the chronicle <ArrowUpRight size={14}/></button></aside></section>
-
-          <section className="bottom-grid"><div className="handover-card"><div className="card-ornament"><BookOpen size={19}/></div><div className="card-copy"><div className="section-overline">KNOWLEDGE TRANSFER</div><h3>Someone new is joining?</h3><p>Give them more than a folder of documents. Give them the context behind the work.</p><button className="button button-dark" onClick={() => setShowHandover(true)}>Prepare a handover <ArrowUpRight size={14}/></button></div><div className="handover-watermark">C</div></div><div className="coverage-card"><div className="panel-head"><div><b>Source coverage</b><small>Connected knowledge surfaces</small></div><span className="coverage-count">03 / 05</span></div><Coverage icon={<GitBranch size={15}/>} name="GitHub repository" detail="northstar/platform" status="Connected"/><Coverage icon={<FileText size={15}/>} name="Project documents" detail="12 indexed files" status="Connected"/><Coverage icon={<Users size={15}/>} name="Meeting records" detail="28 transcripts" status="Connected"/><div className="coverage-pending"><LockKeyhole size={14}/> Task board and team messages not connected</div></div></section>
-          <footer className="footer-note"><span>CONTINUUM <i>·</i> THE LIVING ARCHIVE</span><span>Knowledge should outlast the people who create it.</span><span>LOCAL DEMO DATA</span></footer>
-        </div>
-      </section>
-      {notice && <div className="toast"><Check size={15}/>{notice}<button onClick={() => setNotice('')}><X size={14}/></button></div>}
-      {showHandover && <div className="modal-backdrop" onClick={() => setShowHandover(false)}><div className="handover-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowHandover(false)}><X size={17}/></button><div className="modal-symbol"><BookOpen size={20}/></div><div className="section-overline">CONTINUITY WORKSPACE</div><h2>Prepare a <em>handover.</em></h2><p>Choose who is receiving the knowledge. CONTINUUM will assemble a draft from verified project records and clearly flag anything uncertain.</p><label>Incoming team member<input placeholder="Name or work email"/></label><label>Knowledge scope<select defaultValue="project"><option value="project">Entire project</option><option value="engineering">Engineering and delivery</option><option value="operations">Operations and dependencies</option></select></label><div className="modal-assurance"><ShieldCheck size={16}/><span>Only information permitted for the recipient should be included. Access checks will be enforced in the connected workflow.</span></div><button className="button button-primary modal-submit" onClick={() => {setShowHandover(false);setNotice('Handover draft flow is scaffolded; recipient access checks are not yet connected.')}}>Continue to draft <ArrowUpRight size={15}/></button></div></div>}
-    </main>
-  );
+  const title = active === 'Overview' ? 'The project, remembered.' : active;
+  return <main className="app-shell">
+    <aside className="sidebar">
+      <div className="brand-lockup"><div className="brand-mark"><span/><span/><span/></div><div><div className="brand-name">CONTINUUM</div><div className="brand-kicker">THE LIVING ARCHIVE</div></div></div>
+      <div className="workspace-switch"><div className="workspace-avatar">C</div><span><b>Continuity workspace</b><small>Project intelligence</small></span></div>
+      <div className="nav-scroll">{nav.map(group => <div className="nav-group" key={group.group}><div className="nav-label">{group.group}</div>{group.items.map(item => <button key={item.name} onClick={() => setActive(item.name)} className={`nav-item ${active === item.name ? 'active' : ''}`}><item.icon size={17}/><span>{item.name}</span></button>)}</div>)}</div>
+      <div className="sidebar-bottom"><div className="sync-card"><div className="sync-top"><span className="sync-indicator"/> API CONNECTION</div><b>{error ? 'Needs attention' : loading ? 'Connecting…' : 'Connected'}</b><small>{error ? 'Check backend status' : 'Live project data'}</small></div><div className="profile"><div className="profile-avatar">SA</div><div><b>Workspace owner</b><small>Local development</small></div></div></div>
+    </aside>
+    <section className="main-area">
+      <header className="topbar"><div className="breadcrumbs"><span>{project?.name || 'Workspace'}</span><ChevronRight size={14}/><b>{active}</b></div><div className="top-actions"><div className="search-box"><Search size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search claims and evidence"/></div><button className="icon-button" aria-label="Refresh data" onClick={() => void load()}><RefreshCw size={16}/></button><div className="top-avatar">SA</div></div></header>
+      <div className="content-wrap">
+        <div className="eyebrow"><span className="eyebrow-rule"/> PROJECT INTELLIGENCE <span className="eyebrow-sep">/</span> LIVE WORKSPACE</div>
+        <div className="page-heading"><div><h1>{title.split(',')[0]}{active === 'Overview' ? <>, <em>remembered.</em></> : null}</h1><p className="lead">{active === 'Overview' ? 'A living record of what changed, why it changed, and what must happen next.' : pageDescription(active)}</p></div><div className="heading-actions"><button className="button button-quiet" onClick={() => setActive('Source library')}><Plus size={15}/> Sources</button><button className="button button-primary" onClick={() => { setActive('Handovers'); setHandover(null); }}><BookOpen size={15}/> Create handover</button></div></div>
+        {error && <div className="error-banner"><AlertTriangle size={16}/><span><b>API connection problem.</b> {error} Start the FastAPI server and refresh.</span><button onClick={() => void load()}>Retry</button></div>}
+        {notice && <div className="notice-banner"><Check size={15}/>{notice}<button onClick={() => setNotice('')}><X size={14}/></button></div>}
+        {loading && !project ? <div className="loading-state"><LoaderCircle className="spin" size={22}/> Connecting to the project archive…</div> : !project ? <div className="empty-state large">No projects exist in this workspace yet.</div> : <>
+          {active === 'Overview' && <Overview project={project} summary={summary} claims={filtered} events={events} selected={selected} setSelected={setSelected} review={review} busy={busy} setActive={setActive}/>}
+          {active === 'Evidence room' && <EvidenceRoom claims={filtered} selected={selected} setSelected={setSelected} review={review} busy={busy}/>}
+          {active === 'Source library' && <SourceLibrary sources={sources}/>}
+          {active === 'Chronicle' && <Chronicle events={events}/>}
+          {active === 'Knowledge graph' && <GraphView claims={claims}/>}
+          {active === 'People & ownership' && <Ownership claims={claims}/>}
+          {active === 'Handovers' && <HandoverView recipient={recipient} setRecipient={setRecipient} scope={scope} setScope={setScope} create={createHandover} handover={handover} busy={busy}/>}
+        </>}
+        <footer className="footer-note"><span>CONTINUUM <i>·</i> THE LIVING ARCHIVE</span><span>Knowledge should outlast the people who create it.</span><span>{sources.some(s => s.is_demo) ? 'DEMO SOURCES' : 'LIVE WORKSPACE'}</span></footer>
+      </div>
+    </section>
+  </main>;
 }
 
-function Metric({label,value,note,trend,icon,progress}:{label:string;value:string;note:string;trend:'up'|'down';icon:React.ReactNode;progress:number}) { return <div className="metric-card"><div className="metric-top"><span className="metric-icon">{icon}</span><span className={`trend trend-${trend}`}>{trend==='up'?<ArrowUpRight size={13}/>:<ArrowDownRight size={13}/>} {note}</span></div><div className="metric-value">{value}</div><div className="metric-label">{label}</div><div className="metric-track"><span style={{width:`${progress}%`}}/></div></div> }
-function ChronicleItem({color,date,title,text,tag}:{color:string;date:string;title:string;text:string;tag:string}) { return <div className="chronicle-item"><div className={`chronicle-pin pin-${color}`}/><div className="chronicle-body"><div className="chronicle-date">{date}</div><b>{title}</b><p>{text}</p><span className={`chronicle-tag tag-${color}`}>{tag}</span></div></div> }
-function Coverage({icon,name,detail,status}:{icon:React.ReactNode;name:string;detail:string;status:string}) { return <div className="coverage-row"><span className="coverage-icon">{icon}</span><span className="coverage-name"><b>{name}</b><small>{detail}</small></span><span className="connected"><i/>{status}</span></div> }
+function pageDescription(page: string) {
+  const descriptions: Record<string,string> = {
+    'Evidence room': 'Inspect every claim against the source material that supports it.',
+    'Source library': 'See what has been ingested, where it came from, and its access scope.',
+    'Chronicle': 'An auditable timeline of reviews and changes to project knowledge.',
+    'Knowledge graph': 'Explore the connections between extracted claims and their evidence.',
+    'People & ownership': 'Find ownership signals and gaps that need human attention.',
+    'Handovers': 'Assemble a recipient-specific draft from the current verified project record.',
+  };
+  return descriptions[page] || 'Project knowledge continuity.';
+}
+
+function Overview({ project, summary, claims, events, selected, setSelected, review, busy, setActive }: any) {
+  return <>
+    <section className="project-banner"><div className="banner-copy"><div className="banner-label"><span className="live-dot"/> CONTINUITY PULSE <span className="banner-divider">·</span> PROJECT</div><h2>{project.name}</h2><p>{project.description}</p><div className="banner-meta"><span><GitBranch size={13}/> Project record</span><span><Clock3 size={13}/> Created {new Date(project.created_at).toLocaleDateString()}</span></div></div><div className="pulse-visual"><div className="pulse-ring ring-one"/><div className="pulse-ring ring-two"/><div className="pulse-ring ring-three"/><div className="pulse-core"><Archive size={23}/></div></div></section>
+    <section className="metrics-grid"><Metric label="Knowledge captured" value={`${summary?.knowledge_coverage ?? 0}%`} note="Verified claims / all claims" progress={summary?.knowledge_coverage ?? 0}/><Metric label="Verified claims" value={String(summary?.verified_count ?? 0)} note="Approved for handover" progress={summary?.claim_count ? (summary.verified_count/summary.claim_count)*100 : 0}/><Metric label="Needs review" value={String(summary?.needs_review_count ?? 0)} note="Awaiting human decision" progress={summary?.claim_count ? (summary.needs_review_count/summary.claim_count)*100 : 0}/><Metric label="Conflicts" value={String(summary?.conflict_count ?? 0)} note="Conflicting evidence signals" progress={summary?.claim_count ? (summary.conflict_count/summary.claim_count)*100 : 0}/></section>
+    <div className="section-heading"><div><div className="section-overline">THE RECORD</div><h3>What needs your attention</h3><p>Real claims returned by the CONTINUUM API.</p></div><button className="text-action" onClick={() => setActive('Evidence room')}>Open evidence room <ArrowUpRight size={14}/></button></div>
+    <ClaimList claims={claims.slice(0,4)} selected={selected} setSelected={setSelected} review={review} busy={busy}/>
+    <div className="section-heading compact-heading"><div><div className="section-overline">RECENT ACTIVITY</div><h3>Project chronicle</h3></div><button className="text-action" onClick={() => setActive('Chronicle')}>View all events <ArrowUpRight size={14}/></button></div>
+    <Chronicle events={events.slice(0,4)} compact/>
+  </>;
+}
+
+function Metric({label,value,note,progress}:{label:string;value:string;note:string;progress:number}) {
+  return <div className="metric-card"><div className="metric-top"><span className="metric-icon"><Activity size={16}/></span><span className="trend">{note}</span></div><div className="metric-value">{value}</div><div className="metric-label">{label}</div><div className="metric-track"><span style={{width:`${Math.max(0,Math.min(100,progress))}%`}}/></div></div>;
+}
+
+function ClaimList({claims,selected,setSelected,review,busy}:any) {
+  if (!claims.length) return <div className="empty-state">No claims match this search.</div>;
+  return <div className="claims-panel"><div className="claim-list">{claims.map((claim:Claim) => <article className={`claim-row ${selected===claim.id?'claim-selected':''}`} key={claim.id}><div className="claim-marker"><span className={`marker-${claim.status}`}/></div><div className="claim-content"><div className="claim-topline"><span>{claim.id.slice(0,12)}</span><Status status={claim.status}/></div><h4>{claim.statement}</h4><p>{claim.category} · {claim.owner || 'No owner assigned'}{claim.confidence != null ? ` · confidence ${Math.round(claim.confidence*100)}%` : ''}</p><div className="claim-meta"><span><FileText size={12}/>{claim.evidence.length} evidence record(s)</span><span>{new Date(claim.created_at).toLocaleString()}</span></div>{selected===claim.id && <div className="claim-expanded"><b>Evidence trail</b>{claim.evidence.length ? claim.evidence.map(e=><blockquote key={e.id}><strong>{e.source_title}</strong><br/>{e.excerpt}</blockquote>) : <p>No evidence is attached. Do not verify this claim until provenance is supplied.</p>}<div className="review-actions"><button disabled={busy===claim.id} onClick={()=>review(claim,'verified')}><Check size={13}/> Verify</button><button disabled={busy===claim.id} onClick={()=>review(claim,'needs_review')}>Needs review</button><button disabled={busy===claim.id} onClick={()=>review(claim,'conflict')}>Flag conflict</button><button disabled={busy===claim.id} onClick={()=>review(claim,'rejected')}>Reject</button></div></div>}</div><button className="claim-open" onClick={()=>setSelected(selected===claim.id?null:claim.id)} aria-label="Inspect claim"><ChevronRight size={16}/></button></article>)}</div></div>;
+}
+
+function EvidenceRoom({claims,selected,setSelected,review,busy}:any) {
+  return <><div className="section-heading"><div><div className="section-overline">PROVENANCE & REVIEW</div><h3>Claims and supporting evidence</h3><p>Expand a claim to inspect its source excerpts and record a review decision.</p></div></div><ClaimList claims={claims} selected={selected} setSelected={setSelected} review={review} busy={busy}/></>;
+}
+
+function SourceLibrary({sources}:{sources:Source[]}) {
+  return <div className="surface-panel"><div className="panel-head"><div><b>Ingested sources</b><small>{sources.length} source records · no live connectors configured yet</small></div><span className="coverage-count">{sources.filter(s=>s.is_demo).length} DEMO</span></div>{sources.length ? sources.map(source=><div className="coverage-row source-row" key={source.id}><span className="coverage-icon"><FileText size={15}/></span><span className="coverage-name"><b>{source.title}</b><small>{source.kind} · {source.evidence_count} evidence · scope: {source.access_scope}</small></span><span className="connected">{source.is_demo?'Demo record':'Imported'}</span></div>) : <div className="empty-state">No sources have been ingested.</div>}<div className="callout-note"><CircleHelp size={15}/> GitHub OAuth and document upload are not implemented yet. These records are seeded examples, not connected accounts.</div></div>;
+}
+
+function Chronicle({events,compact=false}:{events:Event[];compact?:boolean}) {
+  return <div className="chronicle-panel"><div className="chronicle-list">{events.length ? events.map(event=><div className="chronicle-item" key={event.id}><div className="chronicle-pin pin-sage"/><div className="chronicle-body"><div className="chronicle-date">{new Date(event.created_at).toLocaleString()} · {event.actor}</div><b>{event.action.replaceAll('_',' ')}</b><p>{event.entity_type} · {event.entity_id}</p><span className="chronicle-tag">{Object.keys(event.details || {}).length ? JSON.stringify(event.details) : 'AUDIT EVENT'}</span></div></div>) : <div className="empty-state">No recorded events yet.</div>}</div></div>;
+}
+
+function GraphView({claims}:{claims:Claim[]}) {
+  return <div className="surface-panel"><div className="panel-head"><div><b>Evidence relationship map</b><small>Current claim-to-evidence relationships</small></div><span className="coverage-count">{claims.length} CLAIMS</span></div><div className="graph-list">{claims.map(c=><div className="graph-row" key={c.id}><div className="graph-node claim-node"><span>CLAIM</span><b>{c.statement}</b><small>{c.status.replace('_',' ')}</small></div><div className="graph-edges"><span/> {c.evidence.length} linked evidence item(s) <span/></div><div className="graph-evidence">{c.evidence.length ? c.evidence.map(e=><div className="graph-node evidence-node" key={e.id}><span>SOURCE EVIDENCE</span><b>{e.source_title}</b><small>{e.excerpt}</small></div>) : <div className="graph-node evidence-node missing"><span>MISSING</span><b>No linked evidence</b></div>}</div></div>)}</div><div className="callout-note">This is a data-backed relationship view, not yet an interactive force-directed graph. Relationship types and cross-claim edges are future work.</div></div>;
+}
+
+function Ownership({claims}:{claims:Claim[]}) {
+  const owners = new Map<string,Claim[]>();
+  claims.forEach(c=>{const key=c.owner || 'Unassigned'; owners.set(key,[...(owners.get(key)||[]),c]);});
+  return <div className="surface-panel"><div className="panel-head"><div><b>Ownership signals</b><small>Derived from claim owner fields; not identity-provider data</small></div></div>{[...owners.entries()].map(([owner,items])=><div className="coverage-row" key={owner}><span className="coverage-icon"><Users size={15}/></span><span className="coverage-name"><b>{owner}</b><small>{items.length} associated claim(s) · {items.filter(c=>c.status==='conflict').length} conflict(s)</small></span><span className={owner==='Unassigned'?'status status-conflict':'connected'}>{owner==='Unassigned'?'Gap detected':'Recorded'}</span></div>)}</div>;
+}
+
+function HandoverView({recipient,setRecipient,scope,setScope,create,handover,busy}:any) {
+  return <div className="handover-workspace"><section className="handover-form surface-panel"><div className="section-overline">KNOWLEDGE TRANSFER</div><h3>Prepare a <em>handover.</em></h3><p>Build a draft from the current project record. Only verified claims are placed in the recipient-facing section; uncertain claims and conflicts remain visibly separated for review.</p><label>Incoming team member<input value={recipient} onChange={e=>setRecipient(e.target.value)} placeholder="Name or work email"/></label><label>Knowledge scope<select value={scope} onChange={e=>setScope(e.target.value)}><option value="project">Entire project</option><option value="engineering">Engineering and delivery</option><option value="operations">Operations and dependencies</option></select></label><button className="button button-primary" disabled={!recipient.trim()||busy==='handover'} onClick={create}>{busy==='handover'?<LoaderCircle className="spin" size={15}/>:<BookOpen size={15}/>} Generate handover draft</button><div className="callout-note"><ShieldCheck size={15}/> This MVP filters by review status only. Recipient-specific authorization and source permission propagation are not implemented; do not share sensitive information.</div></section>
+    {handover ? <section className="handover-result"><div className="handover-result-head"><div className="section-overline">DRAFT GENERATED · {new Date(handover.generated_at).toLocaleString()}</div><h3>Handover for {handover.recipient}</h3><p>Scope: {handover.scope}. Review the uncertainty sections before sharing.</p></div><HandoverGroup title="Verified knowledge" items={handover.verified} tone="sage"/><HandoverGroup title="Needs human review" items={handover.needs_review} tone="brass"/><HandoverGroup title="Conflicting evidence" items={handover.conflicts} tone="copper"/></section> : <div className="handover-placeholder"><BookOpen size={27}/><h3>Your handover draft will appear here.</h3><p>Verified knowledge, unresolved questions and conflicts are kept distinct.</p></div>}
+  </div>;
+}
+
+function HandoverGroup({title,items,tone}:{title:string;items:Claim[];tone:string}) {
+  return <div className="handover-group"><h4 className={`tone-${tone}`}>{title} <span>{items.length}</span></h4>{items.length?items.map(item=><article key={item.id}><b>{item.statement}</b><p>{item.evidence.map(e=>e.source_title).join(' · ') || 'No evidence attached'}</p></article>):<p className="muted-copy">No records in this section.</p>}</div>;
+}
