@@ -34,7 +34,7 @@ def persist(db: Session, project_id: str, kind: str, title: str, uri: str, excer
     if not excerpt:
         return False
     digest = hashlib.sha256(excerpt.encode()).hexdigest()
-    if db.query(Evidence).filter(Evidence.content_hash == digest).first():
+    if db.query(Evidence).join(Source).filter(Evidence.content_hash == digest, Source.project_id == project_id).first():
         return False
     source = Source(id=str(uuid4()), project_id=project_id, kind=kind, external_id=external_id, title=title[:500], uri=uri, access_scope="public_repository", content_hash=digest)
     evidence = Evidence(id=str(uuid4()), source_id=source.id, excerpt=excerpt, locator={"type": kind, "url": uri, "external_id": external_id}, content_hash=digest)
