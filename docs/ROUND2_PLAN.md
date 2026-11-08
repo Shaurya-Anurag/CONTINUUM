@@ -11,6 +11,10 @@
 - [x] Imported evidence has source URLs, external identifiers, content hashes and proposed claim status.
 - [x] Source Library UI exposes the public repository import flow.
 - [x] Input-validation tests for GitHub repository identifiers.
+- [x] Unit tests for claim triage, source/evidence/claim linking, unchanged snapshot deduplication and changed snapshot retention.
+- [x] Environment-driven database URL and CORS origin configuration.
+- [x] Original source links in the Source Library.
+- [x] GitHub Actions CI for backend tests and frontend typecheck/build.
 - [x] Architecture and limitation documentation.
 
 ## Remaining before submission
@@ -26,7 +30,7 @@
 8. Record a truthful demo and document exactly which records are synthetic versus imported.
 
 ### P1 — high-value improvements
-1. Add structured LLM extraction for decisions, ownership, dependencies, risks and open questions. Every extracted claim must cite exact source evidence and begin as proposed.
+1. Add structured semantic extraction for decisions, ownership, dependencies, risks and open questions. Every extracted claim must cite exact source evidence and begin as proposed. Current lexical labels are only triage.
 2. Add a temporal claim history/version table so changed claims do not overwrite previous state.
 3. Add conflict detection across evidence records and a reviewer resolution workflow.
 4. Add file ingestion for Markdown and PDF with type/size limits and source locators.
