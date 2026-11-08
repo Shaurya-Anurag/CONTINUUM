@@ -91,8 +91,8 @@ export default function Home() {
     if (!project || !githubRepository.trim()) return;
     setBusy('github'); setError(''); setNotice('');
     try {
-      const result = await request<{repository:string;claims:number;evidence:number}>(\`/api/v1/projects/\${project.id}/sources/github\`, { method: 'POST', body: JSON.stringify({ repository: githubRepository.trim() }) });
-      setNotice(\`Imported \${result.repository}: \${result.claims} proposed claims and \${result.evidence} evidence records. Review them before verification.\`);
+      const result = await request<{repository:string;claims:number;evidence:number}>(`/api/v1/projects/${project.id}/sources/github`, { method: 'POST', body: JSON.stringify({ repository: githubRepository.trim() }) });
+      setNotice(`Imported ${result.repository}: ${result.claims} proposed claims and ${result.evidence} evidence records. Review them before verification.`);
       setGithubRepository(''); await load();
     } catch (e) { setError(e instanceof Error ? e.message : 'GitHub import failed.'); }
     finally { setBusy(''); }
