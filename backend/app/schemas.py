@@ -22,6 +22,9 @@ class HandoverRequest(BaseModel):
     recipient: str = Field(min_length=1, max_length=180)
     scope: str = Field(default="project", pattern="^(project|engineering|operations)$")
 
+class GitHubImportIn(BaseModel):
+    repository: str = Field(min_length=3, max_length=300)
+
 class HandoverOut(BaseModel):
     project_id: str; recipient: str; scope: str; generated_at: datetime
     verified: list[ClaimOut]; needs_review: list[ClaimOut]; conflicts: list[ClaimOut]
