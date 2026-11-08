@@ -183,7 +183,7 @@ function SourceLibrary({sources,repository,setRepository,importRepository,busy}:
     </div>
     <div className="surface-panel">
       <div className="panel-head"><div><b>Ingested sources</b><small>{sources.length} source records · immutable evidence provenance</small></div><span className="coverage-count">{sources.filter((s:Source)=>s.is_demo).length} DEMO</span></div>
-      {sources.length ? sources.map((source:Source)=><div className="coverage-row source-row" key={source.id}><span className="coverage-icon"><FileText size={15}/></span><span className="coverage-name"><b>{source.title}</b><small>{source.kind} · {source.evidence_count} evidence · scope: {source.access_scope}</small></span><span className="connected">{source.is_demo?'Demo record':'Imported'}</span></div>) : <div className="empty-state">No sources have been ingested.</div>}
+      {sources.length ? sources.map((source:Source)=><div className="coverage-row source-row" key={source.id}><span className="coverage-icon"><FileText size={15}/></span><span className="coverage-name"><b>{source.title}</b><small>{source.kind} · {source.evidence_count} evidence · scope: {source.access_scope}</small>{source.uri && <a href={source.uri} target="_blank" rel="noreferrer" className="source-link">Open original source ↗</a>}</span><span className="connected">{source.is_demo?'Demo record':'Imported'}</span></div>) : <div className="empty-state">No sources have been ingested.</div>}
       <div className="callout-note"><CircleHelp size={15}/> Imported GitHub records are source-linked but remain proposed until a human reviewer verifies them.</div>
     </div>
   </>;
