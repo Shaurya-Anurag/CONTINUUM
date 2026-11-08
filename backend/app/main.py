@@ -7,8 +7,9 @@ from sqlalchemy.orm import Session, joinedload
 
 from .database import Base, engine, get_db
 from .models import Project, Claim, ClaimStatus, AuditEvent, Source, Evidence, ClaimEvidence
-from .schemas import ProjectOut, ClaimOut, ReviewIn, HandoverRequest, HandoverOut
+from .schemas import ProjectOut, ClaimOut, ReviewIn, HandoverRequest, HandoverOut, GitHubImportIn
 from .services import seed_demo, get_claim, claim_payload
+from .github_ingestion import ingest_public_repository
 
 Base.metadata.create_all(bind=engine)
 
@@ -125,6 +126,8 @@ def review_claim(claim_id: str, payload: ReviewIn, db: Session = Depends(get_db)
         ClaimStatus.needs_review, ClaimStatus.conflict,
     }:
         raise HTTPException(422, "Unsupported review transition")
+    if payload.status == ClaimStatus.verified and not claim.evidence_links:
+        raise HTTPException(409, "A claim cannot be verified without supporting evidence.")
     previous = claim.status.value
     claim.status = payload.status
     claim.reviewed_at = datetime.now(timezone.utc)
