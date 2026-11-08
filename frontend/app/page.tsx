@@ -53,6 +53,7 @@ export default function Home() {
   const [recipient, setRecipient] = useState('');
   const [scope, setScope] = useState('project');
   const [handover, setHandover] = useState<Handover | null>(null);
+  const [githubRepository, setGithubRepository] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -86,6 +87,17 @@ export default function Home() {
     finally { setBusy(''); }
   }
 
+  async function importGithub() {
+    if (!project || !githubRepository.trim()) return;
+    setBusy('github'); setError(''); setNotice('');
+    try {
+      const result = await request<{repository:string;claims:number;evidence:number}>(\`/api/v1/projects/\${project.id}/sources/github\`, { method: 'POST', body: JSON.stringify({ repository: githubRepository.trim() }) });
+      setNotice(\`Imported \${result.repository}: \${result.claims} proposed claims and \${result.evidence} evidence records. Review them before verification.\`);
+      setGithubRepository(''); await load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'GitHub import failed.'); }
+    finally { setBusy(''); }
+  }
+
   async function createHandover() {
     if (!project || !recipient.trim()) return;
     setBusy('handover'); setError('');
@@ -114,7 +126,7 @@ export default function Home() {
         {loading && !project ? <div className="loading-state"><LoaderCircle className="spin" size={22}/> Connecting to the project archive…</div> : !project ? <div className="empty-state large">No projects exist in this workspace yet.</div> : <>
           {active === 'Overview' && <Overview project={project} summary={summary} claims={filtered} events={events} selected={selected} setSelected={setSelected} review={review} busy={busy} setActive={setActive}/>}
           {active === 'Evidence room' && <EvidenceRoom claims={filtered} selected={selected} setSelected={setSelected} review={review} busy={busy}/>}
-          {active === 'Source library' && <SourceLibrary sources={sources}/>}
+          {active === 'Source library' && <SourceLibrary sources={sources} repository={githubRepository} setRepository={setGithubRepository} importRepository={importGithub} busy={busy}/>}
           {active === 'Chronicle' && <Chronicle events={events}/>}
           {active === 'Knowledge graph' && <GraphView claims={claims}/>}
           {active === 'People & ownership' && <Ownership claims={claims}/>}
@@ -162,10 +174,20 @@ function EvidenceRoom({claims,selected,setSelected,review,busy}:any) {
   return <><div className="section-heading"><div><div className="section-overline">PROVENANCE & REVIEW</div><h3>Claims and supporting evidence</h3><p>Expand a claim to inspect its source excerpts and record a review decision.</p></div></div><ClaimList claims={claims} selected={selected} setSelected={setSelected} review={review} busy={busy}/></>;
 }
 
-function SourceLibrary({sources}:{sources:Source[]}) {
-  return <div className="surface-panel"><div className="panel-head"><div><b>Ingested sources</b><small>{sources.length} source records · no live connectors configured yet</small></div><span className="coverage-count">{sources.filter(s=>s.is_demo).length} DEMO</span></div>{sources.length ? sources.map(source=><div className="coverage-row source-row" key={source.id}><span className="coverage-icon"><FileText size={15}/></span><span className="coverage-name"><b>{source.title}</b><small>{source.kind} · {source.evidence_count} evidence · scope: {source.access_scope}</small></span><span className="connected">{source.is_demo?'Demo record':'Imported'}</span></div>) : <div className="empty-state">No sources have been ingested.</div>}<div className="callout-note"><CircleHelp size={15}/> GitHub OAuth and document upload are not implemented yet. These records are seeded examples, not connected accounts.</div></div>;
+function SourceLibrary({sources,repository,setRepository,importRepository,busy}:any) {
+  return <>
+    <div className="surface-panel">
+      <div className="panel-head"><div><b>Connect a public GitHub repository</b><small>Import README context, recent commits and open issues as evidence-backed proposed claims.</small></div><GitBranch size={18}/></div>
+      <div className="github-import"><input value={repository} onChange={e=>setRepository(e.target.value)} placeholder="owner/repository or https://github.com/owner/repository"/><button className="button button-primary" disabled={!repository.trim()||busy==='github'} onClick={importRepository}>{busy==='github'?<LoaderCircle className="spin" size={14}/>:<Plus size={14}/>} Import repository</button></div>
+      <div className="callout-note"><ShieldCheck size={15}/> Public repositories only. Imported records start as proposed and require human review. Private repository OAuth is not enabled.</div>
+    </div>
+    <div className="surface-panel">
+      <div className="panel-head"><div><b>Ingested sources</b><small>{sources.length} source records · immutable evidence provenance</small></div><span className="coverage-count">{sources.filter((s:Source)=>s.is_demo).length} DEMO</span></div>
+      {sources.length ? sources.map((source:Source)=><div className="coverage-row source-row" key={source.id}><span className="coverage-icon"><FileText size={15}/></span><span className="coverage-name"><b>{source.title}</b><small>{source.kind} · {source.evidence_count} evidence · scope: {source.access_scope}</small></span><span className="connected">{source.is_demo?'Demo record':'Imported'}</span></div>) : <div className="empty-state">No sources have been ingested.</div>}
+      <div className="callout-note"><CircleHelp size={15}/> Imported GitHub records are source-linked but remain proposed until a human reviewer verifies them.</div>
+    </div>
+  </>;
 }
-
 function Chronicle({events,compact=false}:{events:Event[];compact?:boolean}) {
   return <div className="chronicle-panel"><div className="chronicle-list">{events.length ? events.map(event=><div className="chronicle-item" key={event.id}><div className="chronicle-pin pin-sage"/><div className="chronicle-body"><div className="chronicle-date">{new Date(event.created_at).toLocaleString()} · {event.actor}</div><b>{event.action.replaceAll('_',' ')}</b><p>{event.entity_type} · {event.entity_id}</p><span className="chronicle-tag">{Object.keys(event.details || {}).length ? JSON.stringify(event.details) : 'AUDIT EVENT'}</span></div></div>) : <div className="empty-state">No recorded events yet.</div>}</div></div>;
 }
