@@ -116,6 +116,26 @@ def list_events(project_id: str, db: Session = Depends(get_db)):
     } for event in events]
 
 
+@app.post("/api/v1/projects/{project_id}/sources/github")
+def import_github_repository(project_id: str, payload: GitHubImportIn, db: Session = Depends(get_db)):
+    if not db.get(Project, project_id):
+        raise HTTPException(404, "Project not found")
+    try:
+        return ingest_public_repository(db, project_id, payload.repository)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        from httpx import HTTPError
+        if isinstance(exc, HTTPError):
+            raise HTTPException(502, "GitHub could not be reached or returned an invalid response.") from exc
+        raise
+
+
 @app.post("/api/v1/claims/{claim_id}/review", response_model=ClaimOut)
 def review_claim(claim_id: str, payload: ReviewIn, db: Session = Depends(get_db)):
     claim = get_claim(db, claim_id)
