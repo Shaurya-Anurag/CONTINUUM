@@ -10,7 +10,11 @@ CONTINUUM reconstructs project knowledge from authorised sources and turns it in
 - FastAPI + SQLAlchemy persistence for projects, sources, evidence, claims, claim/evidence relationships, and audit events.
 - Human claim review with an audit event for every review decision.
 - Public GitHub repository import: README context, up to 15 recent commits, and up to 15 open issues.
-- Imported GitHub records are stored with source URLs and evidence excerpts, deduplicated by content hash, and created as **proposed** claims. They are never automatically verified.
+- Imported GitHub records preserve bounded README content, recent commit messages and open issue text with source URLs and evidence excerpts. Unchanged source snapshots are deduplicated; changed snapshots are retained as new evidence records. Claims are always **proposed** and never automatically verified.
+- Conservative lexical category triage labels likely risks, dependencies, decisions, ownership signals and open questions. This is explicitly heuristic classification, not LLM-based semantic extraction.
+- Source Library exposes direct links to original GitHub records.
+- Backend database URL and allowed CORS origins are configurable through environment variables.
+- GitHub Actions CI runs backend tests plus frontend typecheck and production build on pushes and pull requests.
 - Handover drafts separate verified claims, claims needing review, and conflicts.
 
 ## Important limitations (read before demo or use)
