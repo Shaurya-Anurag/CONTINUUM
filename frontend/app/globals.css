@@ -18,3 +18,5 @@
 .github-import input:focus{border-color:#a68b62;box-shadow:0 0 0 2px #b39a6520}
 .github-import button{white-space:nowrap}
 @media(max-width:650px){.github-import{align-items:stretch;flex-direction:column}.github-import button{justify-content:center}}
+
+.source-link{display:inline-block;margin-top:5px;color:#8b7258;font-size:9px;text-decoration:underline;text-underline-offset:3px}.source-link:hover{color:#a66f50}
