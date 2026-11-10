@@ -1,61 +1,59 @@
 # Round 2 delivery plan and acceptance criteria
 
-## Implemented in the current repository
+## Implemented in the repository
 
-- [x] Product workspace and API-backed project overview.
-- [x] Claim/evidence/source/event read endpoints.
+- [x] API-backed project workspace and overview.
+- [x] Claim, evidence, source and audit-event read endpoints.
 - [x] Human claim review with audit-event persistence.
 - [x] Evidence-free verification guard.
-- [x] Handover draft that separates verified, needs-review and conflicting claims.
 - [x] Public GitHub repository ingestion for README, recent commits and open issues.
-- [x] Imported evidence has source URLs, external identifiers, content hashes and proposed claim status.
-- [x] Source Library UI exposes the public repository import flow.
-- [x] Input-validation tests for GitHub repository identifiers.
-- [x] Unit tests for claim triage, source/evidence/claim linking, unchanged snapshot deduplication and changed snapshot retention.
-- [x] Environment-driven database URL and CORS origin configuration.
-- [x] Original source links in the Source Library.
-- [x] GitHub Actions CI for backend tests and frontend typecheck/build.
-- [x] Architecture and limitation documentation.
+- [x] Source URLs, external identifiers, content hashes and unchanged-snapshot deduplication.
+- [x] Proposed claim status for imported records; heuristic labels explicitly documented.
+- [x] Source Library GitHub import and original source links.
+- [x] Environment-driven database URL and CORS origins.
+- [x] GitHub Actions CI configuration.
+- [x] Claim review version records and claim-version read endpoint.
+- [x] Persistent handover draft snapshots and handover history endpoint.
+- [x] Deterministic project-state aggregation endpoint.
+- [x] Unit tests for claim triage, evidence linking, snapshot deduplication, changed snapshots, claim-version persistence and handover persistence.
 
-## Remaining before submission
+## Remaining before a credible submission
 
-### P0 — must complete and verify
-1. Pull the latest main branch and install the new backend dependency.
-2. Run backend tests and frontend typecheck/build; fix every failure.
-3. Import a real public repository and verify source, evidence, claim and audit-event persistence.
-4. Test duplicate import behaviour and GitHub 404/rate-limit/network failures.
-5. Verify review transitions and ensure evidence-free claims cannot be verified.
-6. Verify generated handovers separate verified, unresolved and conflicting records.
-7. Deploy a judge-accessible build and test from a clean browser/session.
-8. Record a truthful demo and document exactly which records are synthetic versus imported.
+### P0 — must verify against a running app
+1. Run the complete backend test suite and frontend typecheck/build after pulling latest main.
+2. Verify GitHub import against a real public repository, including zero-new-record repeat import.
+3. Verify API error handling for 404, 403/rate-limit and network failures.
+4. Exercise project-state aggregation, review transitions, claim history and persisted handover history.
+5. Verify the frontend consumes the updated handover response without runtime errors.
+6. Confirm GitHub Actions passes.
+7. Deploy a judge-accessible build and test it from a clean browser/session.
+8. Record a truthful demo; label synthetic seed records separately from imported records.
 
-### P1 — high-value improvements
-1. Add structured semantic extraction for decisions, ownership, dependencies, risks and open questions. Every extracted claim must cite exact source evidence and begin as proposed. Current lexical labels are only triage.
-2. Add a temporal claim history/version table so changed claims do not overwrite previous state.
-3. Add conflict detection across evidence records and a reviewer resolution workflow.
-4. Add file ingestion for Markdown and PDF with type/size limits and source locators.
-5. Add robust automated API integration tests.
+### P1 — high-value work still not implemented
+1. Structured semantic extraction with a configured model provider, schema validation and exact evidence attribution.
+2. Cross-source entity resolution and evidence conflict candidate detection.
+3. Claim supersession and historical project-state reconstruction.
+4. Markdown/PDF/DOCX ingestion with strict type/size limits and source locators.
+5. Backend API integration tests and mocked GitHub transport tests.
+6. Real authentication, project membership and permission enforcement before any confidential source is used.
+7. Handover approval, recipient authorization and export.
 
-### Explicitly out of scope for the first Round 2 cut
-- Private GitHub OAuth and organization permission sync.
-- Multi-tenant authentication/authorization.
-- Enterprise-grade deployment and observability.
-- A sophisticated force-directed knowledge graph.
+## Explicit limitations
+The MVP currently supports public GitHub ingestion and deterministic aggregation of stored claims. It does not yet provide LLM-based semantic reconstruction, private-source OAuth, tenant isolation, source-level permission inheritance or enterprise security. Do not claim those capabilities in the demo.
 
 ## Round 2 demo acceptance path
-
-1. Open the workspace and show the synthetic seed records are labelled.
-2. Import a public repository through Source Library.
-3. Show imported README/commit/issue sources and their evidence excerpts.
-4. Open a proposed claim and inspect its source link.
-5. Review a claim and show the audit event in Chronicle.
-6. Generate a handover and demonstrate that only verified claims enter the verified section while unresolved and conflicting claims remain separated.
-7. Explain limitations: public-only GitHub, heuristic first-pass claim creation, no LLM reconstruction, no authentication/permission propagation.
+1. Open workspace and identify synthetic seed records.
+2. Import a public repository.
+3. Inspect imported source records and evidence excerpts.
+4. Open a proposed claim and follow its source reference.
+5. Review a claim and show the audit event and claim-version history.
+6. Open the project-state endpoint/view and explain verified versus uncertain information.
+7. Generate a handover and show the persisted draft/history.
+8. Explain public-only ingestion, heuristic extraction, missing auth and the planned semantic/temporal work.
 
 ## Round 3 commitments
-
-1. **Temporal knowledge reconstruction:** claim versions, supersession, ownership changes and project-state timeline.
+1. **Temporal knowledge reconstruction:** claim supersession, ownership changes and historical project-state snapshots.
 2. **Evidence conflict intelligence:** cross-source contradiction candidates, missing evidence signals and human resolution.
-3. **Role-aware handover:** enforce source-level permissions and generate scoped handovers only from authorised evidence.
+3. **Role-aware handover:** enforce source-level permissions and generate scoped handovers only from authorized evidence.
 
 Do not mark a checkbox complete until the feature has been exercised against the running application and the result is recorded.
