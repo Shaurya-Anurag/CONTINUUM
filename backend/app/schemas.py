@@ -4,14 +4,27 @@ from .models import ClaimStatus
 
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: str; name: str; description: str; created_at: datetime
+    id: str
+    name: str
+    description: str
+    created_at: datetime
 
 class EvidenceOut(BaseModel):
-    id: str; source_title: str; excerpt: str; locator: dict = Field(default_factory=dict); observed_at: datetime | None = None
+    id: str
+    source_title: str
+    excerpt: str
+    locator: dict = Field(default_factory=dict)
+    observed_at: datetime | None = None
 
 class ClaimOut(BaseModel):
-    id: str; statement: str; category: str; status: ClaimStatus; confidence: float | None
-    owner: str | None; created_at: datetime; evidence: list[EvidenceOut] = []
+    id: str
+    statement: str
+    category: str
+    status: ClaimStatus
+    confidence: float | None
+    owner: str | None
+    created_at: datetime
+    evidence: list[EvidenceOut] = Field(default_factory=list)
 
 class ReviewIn(BaseModel):
     status: ClaimStatus
@@ -26,6 +39,35 @@ class GitHubImportIn(BaseModel):
     repository: str = Field(min_length=3, max_length=300)
 
 class HandoverOut(BaseModel):
-    project_id: str; recipient: str; scope: str; generated_at: datetime
-    verified: list[ClaimOut]; needs_review: list[ClaimOut]; conflicts: list[ClaimOut]
+    id: str
+    project_id: str
+    recipient: str
+    scope: str
+    generated_at: datetime
+    verified: list[ClaimOut]
+    needs_review: list[ClaimOut]
+    conflicts: list[ClaimOut]
     excluded_count: int = 0
+
+class ClaimVersionOut(BaseModel):
+    id: str
+    claim_id: str
+    version_number: int
+    statement: str
+    category: str
+    status: str
+    owner: str | None
+    changed_by: str
+    change_reason: str | None
+    created_at: datetime
+
+class HandoverRecordOut(BaseModel):
+    id: str
+    project_id: str
+    recipient: str
+    scope: str
+    status: str
+    snapshot: dict
+    created_by: str
+    created_at: datetime
+    approved_at: datetime | None
