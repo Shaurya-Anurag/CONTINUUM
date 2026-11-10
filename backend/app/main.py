@@ -7,7 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
 
 from .database import Base, engine, get_db
-from .models import Project, Claim, ClaimStatus, AuditEvent, Source, Evidence, ClaimEvidence
+from .models import (
+    Project, Claim, ClaimStatus, AuditEvent, Source, Evidence, ClaimEvidence,
+    ClaimVersion, HandoverRecord,
+)
 from .schemas import ProjectOut, ClaimOut, ReviewIn, HandoverRequest, HandoverOut, GitHubImportIn
 from .services import seed_demo, get_claim, claim_payload
 from .github_ingestion import ingest_public_repository
@@ -16,7 +19,7 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="CONTINUUM API",
-    version="0.2.0",
+    version="0.3.0",
     description="Evidence-first project knowledge continuity API",
 )
 
@@ -40,7 +43,7 @@ def startup():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "continuum-api", "version": "0.2.0"}
+    return {"status": "ok", "service": "continuum-api", "version": "0.3.0"}
 
 
 @app.get("/api/v1/projects", response_model=list[ProjectOut])
@@ -70,6 +73,37 @@ def project_summary(project_id: str, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/v1/projects/{project_id}/state")
+def project_state(project_id: str, db: Session = Depends(get_db)):
+    if not db.get(Project, project_id):
+        raise HTTPException(404, "Project not found")
+    claims = db.query(Claim).options(
+        joinedload(Claim.evidence_links).joinedload(ClaimEvidence.evidence).joinedload(Evidence.source)
+    ).filter(Claim.project_id == project_id).order_by(Claim.created_at.desc()).all()
+    grouped = {"verified": [], "inferred_or_unverified": [], "conflicting": [], "rejected": []}
+    for claim in claims:
+        item = claim_payload(claim)
+        if claim.status == ClaimStatus.verified and claim.evidence_links:
+            grouped["verified"].append(item)
+        elif claim.status == ClaimStatus.conflict:
+            grouped["conflicting"].append(item)
+        elif claim.status == ClaimStatus.rejected:
+            grouped["rejected"].append(item)
+        else:
+            grouped["inferred_or_unverified"].append(item)
+    return {
+        "project_id": project_id,
+        "generated_at": datetime.now(timezone.utc),
+        "state_basis": "human-reviewed claims and source-linked proposed claims",
+        "known": grouped["verified"],
+        "uncertain": grouped["inferred_or_unverified"],
+        "conflicting": grouped["conflicting"],
+        "rejected": grouped["rejected"],
+        "limitations": ["State is an aggregation of stored claims, not autonomous semantic reconstruction.",
+                        "No source-level authorization is enforced in this MVP."],
+    }
+
+
 @app.get("/api/v1/projects/{project_id}/claims", response_model=list[ClaimOut])
 def list_claims(project_id: str, status: ClaimStatus | None = None, db: Session = Depends(get_db)):
     if not db.get(Project, project_id):
@@ -82,18 +116,28 @@ def list_claims(project_id: str, status: ClaimStatus | None = None, db: Session 
     return [claim_payload(c) for c in q.order_by(Claim.created_at.desc()).all()]
 
 
+@app.get("/api/v1/claims/{claim_id}/versions")
+def claim_versions(claim_id: str, db: Session = Depends(get_db)):
+    claim = db.get(Claim, claim_id)
+    if not claim:
+        raise HTTPException(404, "Claim not found")
+    versions = db.query(ClaimVersion).filter(ClaimVersion.claim_id == claim_id).order_by(ClaimVersion.version_number.asc()).all()
+    return [{
+        "id": v.id, "claim_id": v.claim_id, "version_number": v.version_number,
+        "statement": v.statement, "category": v.category, "status": v.status,
+        "owner": v.owner, "changed_by": v.changed_by, "change_reason": v.change_reason,
+        "created_at": v.created_at,
+    } for v in versions]
+
+
 @app.get("/api/v1/projects/{project_id}/sources")
 def list_sources(project_id: str, db: Session = Depends(get_db)):
     if not db.get(Project, project_id):
         raise HTTPException(404, "Project not found")
     sources = db.query(Source).filter(Source.project_id == project_id).order_by(Source.imported_at.desc()).all()
     return [{
-        "id": source.id,
-        "kind": source.kind,
-        "title": source.title,
-        "uri": source.uri,
-        "access_scope": source.access_scope,
-        "imported_at": source.imported_at,
+        "id": source.id, "kind": source.kind, "title": source.title, "uri": source.uri,
+        "access_scope": source.access_scope, "imported_at": source.imported_at,
         "evidence_count": db.query(Evidence).filter(Evidence.source_id == source.id).count(),
         "is_demo": source.kind == "demo",
     } for source in sources]
@@ -103,18 +147,25 @@ def list_sources(project_id: str, db: Session = Depends(get_db)):
 def list_events(project_id: str, db: Session = Depends(get_db)):
     if not db.get(Project, project_id):
         raise HTTPException(404, "Project not found")
-    events = db.query(AuditEvent).filter(
-        AuditEvent.project_id == project_id
-    ).order_by(AuditEvent.created_at.desc()).limit(100).all()
+    events = db.query(AuditEvent).filter(AuditEvent.project_id == project_id).order_by(AuditEvent.created_at.desc()).limit(100).all()
     return [{
-        "id": event.id,
-        "actor": event.actor,
-        "action": event.action,
-        "entity_type": event.entity_type,
-        "entity_id": event.entity_id,
-        "details": event.details,
-        "created_at": event.created_at,
+        "id": event.id, "actor": event.actor, "action": event.action,
+        "entity_type": event.entity_type, "entity_id": event.entity_id,
+        "details": event.details, "created_at": event.created_at,
     } for event in events]
+
+
+@app.get("/api/v1/projects/{project_id}/handovers")
+def list_handovers(project_id: str, db: Session = Depends(get_db)):
+    if not db.get(Project, project_id):
+        raise HTTPException(404, "Project not found")
+    rows = db.query(HandoverRecord).filter(HandoverRecord.project_id == project_id).order_by(HandoverRecord.created_at.desc()).all()
+    return [{
+        "id": row.id, "project_id": row.project_id, "recipient": row.recipient,
+        "scope": row.scope, "status": row.status, "snapshot": row.snapshot,
+        "created_by": row.created_by, "created_at": row.created_at,
+        "approved_at": row.approved_at,
+    } for row in rows]
 
 
 @app.post("/api/v1/projects/{project_id}/sources/github")
@@ -142,10 +193,7 @@ def review_claim(claim_id: str, payload: ReviewIn, db: Session = Depends(get_db)
     claim = get_claim(db, claim_id)
     if not claim:
         raise HTTPException(404, "Claim not found")
-    if payload.status not in {
-        ClaimStatus.verified, ClaimStatus.rejected,
-        ClaimStatus.needs_review, ClaimStatus.conflict,
-    }:
+    if payload.status not in {ClaimStatus.verified, ClaimStatus.rejected, ClaimStatus.needs_review, ClaimStatus.conflict}:
         raise HTTPException(422, "Unsupported review transition")
     if payload.status == ClaimStatus.verified and not claim.evidence_links:
         raise HTTPException(409, "A claim cannot be verified without supporting evidence.")
@@ -153,10 +201,16 @@ def review_claim(claim_id: str, payload: ReviewIn, db: Session = Depends(get_db)
     claim.status = payload.status
     claim.reviewed_at = datetime.now(timezone.utc)
     claim.reviewed_by = payload.reviewer
+    next_version = db.query(ClaimVersion).filter(ClaimVersion.claim_id == claim.id).count() + 1
+    db.add(ClaimVersion(
+        id=str(uuid4()), claim_id=claim.id, version_number=next_version,
+        statement=claim.statement, category=claim.category, status=payload.status.value,
+        owner=claim.owner, changed_by=payload.reviewer, change_reason=payload.note,
+    ))
     db.add(AuditEvent(
         id=str(uuid4()), project_id=claim.project_id, actor=payload.reviewer,
         action="claim_reviewed", entity_type="claim", entity_id=claim.id,
-        details={"from": previous, "to": payload.status.value, "note": payload.note},
+        details={"from": previous, "to": payload.status.value, "note": payload.note, "version": next_version},
     ))
     db.commit()
     db.refresh(claim)
@@ -165,14 +219,26 @@ def review_claim(claim_id: str, payload: ReviewIn, db: Session = Depends(get_db)
 
 @app.post("/api/v1/projects/{project_id}/handovers", response_model=HandoverOut)
 def create_handover(project_id: str, payload: HandoverRequest, db: Session = Depends(get_db)):
-    project = db.get(Project, project_id)
-    if not project:
+    if not db.get(Project, project_id):
         raise HTTPException(404, "Project not found")
     claims = db.query(Claim).filter(Claim.project_id == project_id).all()
-    verified = [claim_payload(get_claim(db, c.id)) for c in claims if c.status == ClaimStatus.verified]
+    verified = [claim_payload(get_claim(db, c.id)) for c in claims if c.status == ClaimStatus.verified and c.evidence_links]
     needs_review = [claim_payload(get_claim(db, c.id)) for c in claims if c.status in {ClaimStatus.needs_review, ClaimStatus.proposed}]
     conflicts = [claim_payload(get_claim(db, c.id)) for c in claims if c.status == ClaimStatus.conflict]
+    excluded = sum(1 for c in claims if c.status == ClaimStatus.rejected)
+    generated_at = datetime.now(timezone.utc)
     handover_id = str(uuid4())
+    snapshot = {
+        "verified": verified, "needs_review": needs_review, "conflicts": conflicts,
+        "excluded_count": excluded, "limitations": [
+            "Recipient-specific authorization is not implemented.",
+            "Only explicitly verified, evidence-linked claims are in the verified section."
+        ],
+    }
+    db.add(HandoverRecord(
+        id=handover_id, project_id=project_id, recipient=payload.recipient,
+        scope=payload.scope, status="draft", snapshot=snapshot,
+    ))
     db.add(AuditEvent(
         id=str(uuid4()), project_id=project_id, actor="workspace-owner",
         action="handover_draft_created", entity_type="handover", entity_id=handover_id,
@@ -180,8 +246,7 @@ def create_handover(project_id: str, payload: HandoverRequest, db: Session = Dep
     ))
     db.commit()
     return {
-        "project_id": project_id, "recipient": payload.recipient, "scope": payload.scope,
-        "generated_at": datetime.now(timezone.utc), "verified": verified,
-        "needs_review": needs_review, "conflicts": conflicts,
-        "excluded_count": sum(1 for c in claims if c.status not in {ClaimStatus.verified, ClaimStatus.needs_review, ClaimStatus.proposed, ClaimStatus.conflict}),
+        "id": handover_id, "project_id": project_id, "recipient": payload.recipient,
+        "scope": payload.scope, "generated_at": generated_at, "verified": verified,
+        "needs_review": needs_review, "conflicts": conflicts, "excluded_count": excluded,
     }
