@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
-from sqlalchemy import String, Text, DateTime, ForeignKey, Enum as SAEnum, JSON, Boolean, Index
+from sqlalchemy import String, Text, DateTime, ForeignKey, Enum as SAEnum, JSON, Index, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
@@ -71,6 +71,32 @@ class ClaimEvidence(Base):
     relation: Mapped[str] = mapped_column(String(30), default="supports")
     claim: Mapped[Claim] = relationship(back_populates="evidence_links")
     evidence: Mapped[Evidence] = relationship(back_populates="claim_links")
+
+class ClaimVersion(Base):
+    __tablename__ = "claim_versions"
+    __table_args__ = (UniqueConstraint("claim_id", "version_number", name="uq_claim_version_number"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.id", ondelete="CASCADE"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(60), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    owner: Mapped[str | None] = mapped_column(String(180))
+    changed_by: Mapped[str] = mapped_column(String(180), nullable=False)
+    change_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class HandoverRecord(Base):
+    __tablename__ = "handover_records"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    recipient: Mapped[str] = mapped_column(String(180), nullable=False)
+    scope: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="draft")
+    snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(180), default="workspace-owner")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 class AuditEvent(Base):
     __tablename__ = "audit_events"
